@@ -1,0 +1,3 @@
+site_url,app_type,app_version,cluster_name,db_server,db_port,db_user_name,db_password,db_service_name,smoke_site_url,smoke_db_user_name,smoke_db_password,smoke_db_service_name,smoke_site_folder
+fran-labor-margqa-102000.nc-local.com,ces,10.10.00.02,ces-patch1020-c02,devcl003.dev.some.domain.com,1521,fran_labor,dummy_margqa,service_name,fran-labor-margqa-102000s.nc-local.com,username,pass,service_name,fran-labor-margqa
+fran-labor-margqa-102000.tmx-local.com,twx,10.1.1,twx-patch1020-c02,devcl003.dev.some.domain.com,1521,fran_labor,dummy_margqa,service_name,fran-labor-margqa-102000s.tmx-local.com,username,pass,service_name,fran-labor-margqa

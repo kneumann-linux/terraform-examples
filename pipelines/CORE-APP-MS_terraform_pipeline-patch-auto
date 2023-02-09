@@ -1,0 +1,99 @@
+// Powered by Infostretch 
+
+timestamps {
+node ('AIO-infra') {
+
+    stage('Setup parameters') {
+      script { 
+          properties([
+              parameters([
+                  string(
+                  defaultValue: 'none',
+                  description: 'Workspace env to build. patch-10, patch-1010',
+                  name: 'tf_workspace'
+                  )
+              ])
+          ])
+      }
+    }
+ 
+    env.inventory_file = env.tf_workspace
+    env.deploy_env = 'dev'
+
+    if( env.tf_workspace == "none" ) {
+      currentBuild.result = 'SUCCESS'
+      return
+    }
+
+    stage ('AutoOps_terraform_plan - Prep') {
+       cleanWs notFailBuild: true
+       
+    }
+
+	stage ('AutoOps_terraform_plan - Checkout') {
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkins-gitlab-deploy', url: 'ssh://git@gitlab.some.domain.com/iac/kubernetes.git']]])	
+        withCredentials([file(credentialsId: "kube-config-admin", variable: 'my_private_key')]) {
+        sh "mkdir -p .kube/"
+        writeFile file: '.kube/config', text: readFile(my_private_key)
+    }
+    }
+	stage ('AutoOps_terraform_plan - Init') {
+	  withCredentials([
+	         string(credentialsId: 'consul_backend_token_ctms', variable: 'backend_config_token')  
+	 ]){      
+     sh """ 
+     deploy_env=dev
+     cd terraform
+     terraform init -no-color -backend-config=access_token=${backend_config_token} -backend-config provider-vars/${deploy_env}-backend.tfvars -plugin-dir=/home/jenkins/terraform-plugins/linux_amd64
+     terraform workspace list | grep ".* `echo -n ${tf_workspace}`\$" || terraform workspace new ${tf_workspace} -no-color
+     terraform workspace select ${tf_workspace} -no-color
+      """ 
+	 }
+	}
+	stage ('AutoOps_terraform_plan - Plan') {
+     	
+        withCredentials([
+    string(credentialsId: 'hcv_role_id_ctcore', variable: 'login_approle_role_id'),
+    string(credentialsId: 'hcv_secret_id_ctcore', variable: 'login_approle_secret_id') , 
+    string(credentialsId: 'cloudflare_global_api_token_kneumann', variable: 'cloudflare_api_token'), 
+    usernamePassword(credentialsId: "AWS-creds-kneumann", usernameVariable: 'aws_access_key', passwordVariable: 'aws_secret_key')
+    ]){
+    wrap([$class: 'MaskPasswordsBuildWrapper', varPasswordPairs: [
+        [var: 'cloudflare_api_token', password: cloudflare_api_token],
+        [var: 'aws_access_key', password: aws_access_key],
+        [var: 'aws_secret_key', password: aws_secret_key] ],
+        varMaskRegexes: []]
+    ) 
+    
+    {
+        
+    wrap([$class: 'BuildUser']){
+    sh """
+    deploy_env=dev
+    cd terraform
+    terraform plan -no-color -out=plan-`echo ${BUILD_USER} | sed -e 's/ /_/g'`.out -var-file=cluster-inv/${inventory_file}.tfvars -var login_approle_role_id=${login_approle_role_id} -var login_approle_secret_id=${login_approle_secret_id} -var cloudflare_api_token=${cloudflare_api_token} -var aws_access_key=${aws_access_key} -var aws_secret_key=${aws_secret_key}
+     """
+    }
+    }
+    }
+	}
+  stage ('AutoOps_terraform_plan - Apply') {
+  wrap([$class: 'BuildUser']){
+    sh """ 
+      deploy_env=dev
+      cd terraform
+      terraform apply -auto-approve -no-color plan-`echo ${BUILD_USER} | sed -e 's/ /_/g'`.out
+     """ 
+  }
+    
+    
+}
+	    
+
+      
+  stage ('AutoOps_terraform_plan - Cleanup') {
+     cleanWs notFailBuild: true
+  }
+ }
+
+}   

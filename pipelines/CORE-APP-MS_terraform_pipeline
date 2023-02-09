@@ -1,0 +1,124 @@
+// Powered by Infostretch 
+
+timestamps {
+
+node ('ansible-terraform') { 
+    env.deploy_env = 'dev'
+
+    stage('Setup parameters') {
+      script { 
+          properties([
+              parameters([
+                  choice(
+                      choices: ['default'], 
+                      name: 'tf_workspace'
+                  ),
+                  choice(
+                      choices: ['demo'], 
+                      name: 'inventory_file'
+                  ),
+                  password(
+                      defaultValue: '', 
+                      name: 'cloudflare_api_token', 
+                      trim: true
+                  ),
+                  password(
+                      defaultValue: '', 
+                      name: 'aws_access_key', 
+                      trim: true
+                  ),
+                  password(
+                      defaultValue: '', 
+                      name: 'aws_secret_key', 
+                      trim: true
+                  )
+              ])
+          ])
+      }
+    }
+
+
+    stage ('AutoOps_terraform_plan - Prep') {
+       cleanWs notFailBuild: true
+    }
+
+	stage ('AutoOps_terraform_plan - Checkout') {
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkins-gitlab-deploy', url: 'ssh://git@gitlab.some.domain.com/infrastructure/kubernetes.git']]])	
+        withCredentials([file(credentialsId: "kube-config-admin", variable: 'my_private_key')]) {
+          writeFile file: '~/.kube/config', text: readFile(my_private_key)
+    }
+    }
+	stage ('AutoOps_terraform_plan - Init') {
+	  withCredentials([
+	         string(credentialsId: 'consul_backend_token_ctms', variable: 'backend_config_token')  
+	 ]){      
+     sh """ 
+     deploy_env=dev
+     cd terraform
+     terraform init -no-color -backend-config=access_token=${backend_config_token} -backend-config provider-vars/${deploy_env}-backend.tfvars
+     terraform workspace list | grep ".* `echo -n ${tf_workspace}`\$" || terraform workspace new ${tf_workspace} -no-color
+     terraform workspace select ${tf_workspace} -no-color
+      """ 
+	 }
+	}
+	stage ('AutoOps_terraform_plan - Plan') {
+     	
+        withCredentials([
+    string(credentialsId: 'hcv_role_id_ctcore', variable: 'login_approle_role_id'),
+    string(credentialsId: 'hcv_secret_id_ctcore', variable: 'login_approle_secret_id') //, 
+    //string(credentialsId: 'cloudflare_global_api_token_kneumann', variable: 'cloudflare_api_token'), 
+    //usernamePassword(credentialsId: "AWS-creds-kneumann", usernameVariable: 'aws_access_key', passwordVariable: 'aws_secret_key')
+    ]){
+    wrap([$class: 'MaskPasswordsBuildWrapper', varPasswordPairs: [
+        [var: 'cloudflare_api_token', password: cloudflare_api_token],
+        [var: 'aws_access_key', password: aws_access_key],
+        [var: 'aws_secret_key', password: aws_secret_key] ],
+        varMaskRegexes: []]
+    ) 
+    
+    {
+        
+    wrap([$class: 'BuildUser']){
+    sh """
+    deploy_env=dev
+    cd terraform
+    terraform plan -no-color -out=plan-`echo ${BUILD_USER} | sed -e 's/ /_/g'`.out -var-file=cluster-inv/${inventory_file}.tfvars -var login_approle_role_id=${login_approle_role_id} -var login_approle_secret_id=${login_approle_secret_id} -var cloudflare_api_token=${cloudflare_api_token} -var aws_access_key=${aws_access_key} -var aws_secret_key=${aws_secret_key}
+     """
+    }
+    }
+    }
+	}
+  stage ('AutoOps_terraform_plan - User Approve') {
+    if ( params.auto_build == null ) {
+      userInput = input(
+          id: 'userInput', message: "Ready to continue?", parameters: [
+          booleanParam(defaultValue: false, description: 'Apply output of Plan', name: 'approve')
+      ])
+    }
+  }
+  stage ('AutoOps_terraform_plan - Apply') {
+        if (userInput) {
+        wrap([$class: 'BuildUser']){
+    sh """ 
+      deploy_env=dev
+      cd terraform
+      terraform apply -auto-approve -no-color plan-`echo ${BUILD_USER} | sed -e 's/ /_/g'`.out
+     """ 
+    }
+    } else {
+        // do what ever you want when skipping this build
+        echo "Skipping apply"
+    }
+    
+    
+    
+}
+	    
+
+      
+  stage ('AutoOps_terraform_plan - Cleanup') {
+     cleanWs notFailBuild: true
+  }
+ }
+
+}   

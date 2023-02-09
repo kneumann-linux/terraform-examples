@@ -1,0 +1,8 @@
+terraform*/*/.terraform*
+terraform*/.terraform/*
+terraform*/terraform.tfstate*
+terraform*/*/terraform.tfstate*
+terraform*/test
+terraform*/terraform.tfvars
+terraform*/.terraform*
+.kube/config

@@ -1,0 +1,98 @@
+// Powered by Infostretch 
+
+timestamps {
+node ('ansible-terraform') {
+
+  stage('Setup parameters') {
+    script { 
+        properties([
+            parameters([
+                string(
+                defaultValue: 'none',
+                description: 'Workspace env to build. patch-10, patch-1010, etc. Use value provided by Infra Team',
+                name: 'tf_workspace'
+                ),
+                password(
+                    name: 'vault_token', 
+                    description: 'Currently active Vault Token - http://confluence.some.domain.com/pages/viewpage.action?pageId=152767035#Dev/QADeployPatchEnviroment-RunJenkinsimportjob '
+                )
+            ])
+        ])
+    }
+  }
+
+  if( env.tf_workspace == "none" ) {
+    currentBuild.result = 'SUCCESS'
+    return
+  }
+  
+  env.deploy_env = 'dev'
+  
+  stage ('AutoOps_terraform_plan - Cleanup') {
+     cleanWs()   
+  }
+  stage ('AutoOps_terraform_plan - Checkout') {
+        checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkins-gitlab-deploy', url: 'ssh://git@gitlab.some.domain.com/iac/kubernetes.git']]])	
+  }
+  stage ('AutoOps_terraform_plan - Checkout Inventory') {
+        sh "mkdir -p terraform-vault-import/vault-import"
+        dir ('terraform-vault-import/vault-import') {
+            checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: 'jenkins-gitlab-deploy', url: 'ssh://git@gitlab.some.domain.com/devqa-patch-env/vault-import.git']]])	
+        }
+  }
+	stage ('AutoOps_terraform_plan - Init') {
+  wrap([$class: "MaskPasswordsBuildWrapper",
+             varPasswordPairs: [[password: vault_token],
+                                [password: vault_token]]]) {
+         
+   sh """ 
+   deploy_env=dev
+   cd terraform-vault-import
+   terraform init -no-color -backend-config=password=${vault_token} -backend-config=username=${env.tf_workspace} -plugin-dir=/home/jenkins/terraform-plugins/linux_amd64
+    """
+    } 
+	}
+  stage ('AutoOps_terraform_plan - Plan') {
+       withCredentials([usernamePassword(credentialsId: 'hcv_role_id_ctcore_deploy', usernameVariable: 'login_approle_role_id', passwordVariable: 'login_approle_secret_id')]) {
+          wrap([$class: 'BuildUser']){
+            sh """
+            deploy_env=dev
+            cd terraform-vault-import
+            terraform plan -no-color -out=plan-`echo ${BUILD_USER} | sed -e 's/ /_/g'`.out -var import-filepath="./vault-import/inventory/" -var import-filename="${env.tf_workspace}.csv" -var login_approle_role_id=${login_approle_role_id} -var login_approle_secret_id=${login_approle_secret_id} 
+           """
+          }
+        }
+    }
+    
+    
+    stage ('AutoOps_terraform_plan - User Approve') {
+      if ( params.auto_build == null ) {
+        userInput = input(
+            id: 'userInput', message: "Ready to continue?", parameters: [
+            booleanParam(defaultValue: false, description: 'Apply output of Plan', name: 'approve')
+        ])
+      }
+    }
+    
+    stage ('AutoOps_terraform_plan - Apply') {
+          if (userInput) {
+          wrap([$class: 'BuildUser']){
+      sh """ 
+        deploy_env=dev
+        cd terraform-vault-import
+        terraform apply -auto-approve -no-color plan-`echo ${BUILD_USER} | sed -e 's/ /_/g'`.out
+       """ 
+      }
+      } else {
+          // do what ever you want when skipping this build
+          echo "Skipping apply"
+      }
+      
+    }
+    
+  stage ('AutoOps_terraform_plan - Cleanup') {
+     cleanWs  notFailBuild: true
+  }
+
+}
+}

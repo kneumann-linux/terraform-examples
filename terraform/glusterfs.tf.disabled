@@ -1,0 +1,35 @@
+resource "kubernetes_service_v1" "glusterfs-cluster-service" {
+    metadata {
+      name = "glusterfs-cluster"
+    }
+    spec {
+      port {
+        port = 49152
+        protocol = "TCP"
+        target_port = 49152
+      }
+    }
+}
+
+resource "kubernetes_endpoints_v1" "glusterfs-cluster-endpoint" {
+  metadata {
+    name = "glusterfs-cluster"
+  }
+
+  subset {
+    address {
+      ip = "10.96.150.14"
+    }
+
+    address {
+      ip = "10.96.150.16"
+    }
+
+    port {
+      name     = "glusterfs"
+      port     = 49152
+      protocol = "TCP"
+    }
+  }
+
+}
